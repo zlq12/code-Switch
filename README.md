@@ -440,6 +440,33 @@ Run the full chain with:
 python .\code_ocr.py recover-one ".\data\reference\App_Test.cpp"
 ```
 
+### Batch Recovery
+
+After the single-file flow is stable, process a whole folder with:
+
+```powershell
+python .\code_ocr.py recover-batch ".\data\reference"
+```
+
+The batch command recursively scans source files using `batch_source_extensions` and runs the same capture/OCR/fix/BC alignment flow as `recover-one`.
+
+Useful dry-run and recovery variants:
+
+```powershell
+python .\code_ocr.py recover-batch ".\data\reference" --limit 1
+python .\code_ocr.py recover-batch ".\data\reference" --extensions ".cpp,.h" --limit 5
+python .\code_ocr.py recover-batch ".\data\reference" --no-capture
+python .\code_ocr.py recover-batch ".\data\reference" --mock-ocr --no-bc --no-capture
+```
+
+For files inside subdirectories, PDFs are named from their relative path to avoid collisions:
+
+```text
+.\data\reference\app\Module\Mod_GUI.cpp
+-> .\data\pdf\app__Module__Mod_GUI.cpp.pdf
+-> logical path app/Module/Mod_GUI.cpp
+```
+
 For exact correction, keep the BC HTML alignment source side on the encrypted/original file side:
 
 ```json

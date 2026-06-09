@@ -118,6 +118,12 @@
   "default_extension": ".md",
   "final_output_extension": ".md",
   "fixed_output_encoding": "gb18030",
+  "batch_source_extensions": [
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp"
+  ],
   "reference_extensions": [
     ".c",
     ".cpp",

@@ -6,10 +6,12 @@ import code_ocr
 
 def test_guess_logical_path() -> None:
     assert code_ocr.guess_logical_path(Path("src__main_cpp.pdf"), ".txt") == "src/main.cpp"
+    assert code_ocr.guess_logical_path(Path("src__module__main.cpp.pdf"), ".txt") == "src/module/main.cpp"
     assert code_ocr.guess_logical_path(Path("main.py.pdf"), ".txt") == "main.py"
     assert code_ocr.guess_logical_path(Path("main_py.pdf"), ".txt") == "main.py"
     assert code_ocr.pdf_output_name(Path("App_Test.cpp")) == "App_Test.cpp.pdf"
     assert code_ocr.pdf_output_name(Path("App_Test.cpp"), "App_Test.pdf") == "App_Test.pdf"
+    assert code_ocr.batch_pdf_output_name(Path("root/src/main.cpp"), Path("root")) == "src__main.cpp.pdf"
     assert code_ocr.parse_sendkeys_hotkey("^%{PRTSC}") == ([0x11, 0x12], 0x2C)
     assert code_ocr.parse_sendkeys_hotkey("^%r") == ([0x11, 0x12], ord("R"))
     assert code_ocr.parse_sendkeys_hotkey("^{F10}") == ([0x11], 0x79)
@@ -115,6 +117,35 @@ def test_recover_one_mock_without_gui() -> None:
             code_ocr.ROOT = old_root
 
 
+def test_recover_batch_mock_without_gui() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        old_root = code_ocr.ROOT
+        code_ocr.ROOT = root
+        try:
+            code_ocr.main(["init"])
+            source_dir = root / "data" / "reference"
+            nested = source_dir / "module"
+            nested.mkdir(parents=True, exist_ok=True)
+            (source_dir / "a.c").write_text("int a(void) { return 1; }\n", encoding="utf-8")
+            (nested / "b.cpp").write_text("int b(void) { return 2; }\n", encoding="utf-8")
+            pdf_dir = root / "data" / "pdf"
+            pdf_dir.mkdir(parents=True, exist_ok=True)
+            (pdf_dir / "a.c.pdf").write_bytes(b"%PDF-1.4\n")
+            (pdf_dir / "module__b.cpp.pdf").write_bytes(b"%PDF-1.4\n")
+            code_ocr.main([
+                "recover-batch",
+                str(source_dir),
+                "--no-capture",
+                "--mock-ocr",
+                "--no-bc",
+            ])
+            assert (root / "output" / "fixed" / "a.md").exists()
+            assert (root / "output" / "fixed" / "module" / "b.md").exists()
+        finally:
+            code_ocr.ROOT = old_root
+
+
 if __name__ == "__main__":
     test_guess_logical_path()
     test_clean_code()
@@ -123,4 +154,5 @@ if __name__ == "__main__":
     test_reference_binary_detection()
     test_cli_mock_pipeline()
     test_recover_one_mock_without_gui()
+    test_recover_batch_mock_without_gui()
     print("smoke tests passed")

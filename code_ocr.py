@@ -110,6 +110,7 @@ DEFAULT_CONFIG = {
     "final_output_extension": ".md",
     "fixed_output_encoding": "gb18030",
     "reference_extensions": [".c", ".cpp", ".h", ".hpp", ".py", ".java", ".js", ".ts", ".cs", ".md", ".txt"],
+    "batch_source_extensions": [".c", ".cpp", ".h", ".hpp"],
     "reference_encoding": "auto",
     "bc_script_dir": "output/bc_scripts",
     "bc_report_dir": "output/bc_reports",
@@ -230,8 +231,6 @@ def normalize_id(value: str) -> str:
 
 def guess_logical_path(pdf: Path, default_extension: str) -> str:
     stem = pdf.stem
-    if "." in stem:
-        return stem
     parts = stem.split("__")
     if len(parts) > 1:
         filename = parts[-1]
@@ -239,6 +238,8 @@ def guess_logical_path(pdf: Path, default_extension: str) -> str:
             base, ext = filename.rsplit("_", 1)
             filename = f"{base}.{ext}"
         return str(Path(*parts[:-1], filename)).replace("\\", "/")
+    if "." in stem:
+        return stem
     if "_" in stem:
         base, ext = stem.rsplit("_", 1)
         if 1 <= len(ext) <= 5:
@@ -269,6 +270,35 @@ def pdf_output_name(source_file: Path, requested_name: str | None = None) -> str
     if not name.lower().endswith(".pdf"):
         name += ".pdf"
     return name
+
+
+def batch_pdf_output_name(source_file: Path, source_root: Path) -> str:
+    try:
+        relative = source_file.resolve().relative_to(source_root.resolve())
+    except ValueError:
+        return pdf_output_name(source_file)
+    encoded = "__".join(relative.parts)
+    return f"{encoded}.pdf"
+
+
+def batch_source_files(source_root: Path, config: dict[str, Any], recursive: bool, extensions_arg: str | None = None) -> list[Path]:
+    if source_root.is_file():
+        return [source_root.resolve()]
+    if not source_root.exists():
+        raise FileNotFoundError(f"Source directory does not exist: {source_root}")
+    raw_extensions = (
+        [item.strip() for item in extensions_arg.split(",") if item.strip()]
+        if extensions_arg
+        else list(config.get("batch_source_extensions") or config.get("reference_extensions", []))
+    )
+    extensions = set(normalize_extensions(raw_extensions))
+    iterator = source_root.rglob("*") if recursive else source_root.glob("*")
+    files = [
+        path.resolve()
+        for path in iterator
+        if path.is_file() and path.suffix.lower() in extensions
+    ]
+    return sorted(files, key=lambda path: str(path).lower())
 
 
 def launch_source_file(config: dict[str, Any], source_file: Path) -> None:
@@ -2592,6 +2622,58 @@ def cmd_recover_one(args: argparse.Namespace) -> None:
     print("Recover-one complete.")
 
 
+def cmd_recover_batch(args: argparse.Namespace) -> None:
+    config = load_config(ROOT / args.config)
+    source_root = resolve_workspace_path(args.source_root).resolve()
+    recursive = not args.non_recursive
+    files = batch_source_files(source_root, config, recursive, args.extensions)
+    if args.limit:
+        files = files[: int(args.limit)]
+    if not files:
+        raise SystemExit(f"No source files found in {source_root}")
+
+    print(f"Recover-batch found {len(files)} source file(s) under {source_root}")
+    successes: list[Path] = []
+    failures: list[tuple[Path, str]] = []
+    for index, source_file in enumerate(files, start=1):
+        pdf_name = batch_pdf_output_name(source_file, source_root if source_root.is_dir() else source_file.parent)
+        print(f"[{index}/{len(files)}] Recovering: {source_file} -> {pdf_name}")
+        recover_args = argparse.Namespace(
+            config=args.config,
+            source_file=str(source_file),
+            pdf_dir=args.pdf_dir,
+            pdf_name=pdf_name,
+            output_mode=args.output_mode,
+            image_dir=args.image_dir,
+            convert_hotkey=args.convert_hotkey,
+            hotkey=args.hotkey,
+            window_title=args.window_title,
+            pause_before_drag=args.pause_before_drag,
+            wait_timeout=args.wait_timeout,
+            no_capture=args.no_capture,
+            mock_ocr=args.mock_ocr,
+            no_bc=args.no_bc,
+            no_verify=args.no_verify,
+        )
+        try:
+            cmd_recover_one(recover_args)
+            successes.append(source_file)
+        except Exception as exc:
+            failures.append((source_file, str(exc)))
+            print(f"Recover failed: {source_file}: {exc}", file=sys.stderr)
+            if args.stop_on_error:
+                break
+        if args.between_delay:
+            time.sleep(float(args.between_delay))
+
+    print(f"Recover-batch complete: {len(successes)} succeeded, {len(failures)} failed")
+    if failures:
+        for source_file, error in failures:
+            print(f"  FAILED {source_file}: {error}", file=sys.stderr)
+        if args.stop_on_error:
+            raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Batch OCR pipeline for FastStone PDF code screenshots.")
     parser.add_argument("--config", default="config.json")
@@ -2713,6 +2795,27 @@ def build_parser() -> argparse.ArgumentParser:
     recover_one.add_argument("--no-bc", action="store_true", help="Skip Beyond Compare stages.")
     recover_one.add_argument("--no-verify", action="store_true", help="Do not regenerate a BC report after HTML alignment.")
     recover_one.set_defaults(func=cmd_recover_one)
+
+    recover_batch = sub.add_parser("recover-batch", help="Run recover-one over a directory of source files.")
+    recover_batch.add_argument("source_root", help="Source file or directory to process.")
+    recover_batch.add_argument("--extensions", help="Comma-separated source extensions. Defaults to batch_source_extensions.")
+    recover_batch.add_argument("--non-recursive", action="store_true", help="Only process files directly under source_root.")
+    recover_batch.add_argument("--limit", help="Process only the first N files, useful for dry runs.")
+    recover_batch.add_argument("--between-delay", help="Seconds to wait between files.")
+    recover_batch.add_argument("--stop-on-error", action="store_true", help="Stop the batch at the first failed file.")
+    recover_batch.add_argument("--pdf-dir", help="Directory where FastStone writes PDF files.")
+    recover_batch.add_argument("--output-mode", choices=["pdf", "faststone_current_image_pdf", "faststone_save_as_pdf", "faststone_pdf_tool", "image_then_pdf"], help="How FastStone output becomes PDF.")
+    recover_batch.add_argument("--image-dir", help="Directory where FastStone writes screenshot images before PDF conversion.")
+    recover_batch.add_argument("--convert-hotkey", help="Hotkey that triggers FastStone's built-in PDF conversion.")
+    recover_batch.add_argument("--hotkey", help="Override FastStone capture hotkey.")
+    recover_batch.add_argument("--window-title", help="Source Insight window title.")
+    recover_batch.add_argument("--pause-before-drag", action="store_true", help="Pause after FastStone hotkey before dragging region.")
+    recover_batch.add_argument("--wait-timeout", help="Seconds to wait for FastStone PDF output.")
+    recover_batch.add_argument("--no-capture", action="store_true", help="Skip capture and reuse existing PDFs.")
+    recover_batch.add_argument("--mock-ocr", action="store_true", help="Use mock OCR for testing the local pipeline.")
+    recover_batch.add_argument("--no-bc", action="store_true", help="Skip Beyond Compare stages.")
+    recover_batch.add_argument("--no-verify", action="store_true", help="Do not regenerate a BC report after HTML alignment.")
+    recover_batch.set_defaults(func=cmd_recover_batch)
 
     return parser
 
