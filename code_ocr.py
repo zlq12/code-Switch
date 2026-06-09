@@ -107,7 +107,7 @@ DEFAULT_CONFIG = {
     "llamaparse_timeout_seconds": 300,
     "beyond_compare_path": "C:/Program Files/Beyond Compare 5/BCompare.exe",
     "default_extension": ".md",
-    "final_output_extension": ".md",
+    "final_output_extension": "",
     "fixed_output_encoding": "gb18030",
     "reference_extensions": [".c", ".cpp", ".h", ".hpp", ".py", ".java", ".js", ".ts", ".cs", ".md", ".txt"],
     "batch_source_extensions": [".c", ".cpp", ".h", ".hpp"],
@@ -2732,7 +2732,7 @@ def build_parser() -> argparse.ArgumentParser:
     clean.add_argument("--task")
     clean.set_defaults(func=cmd_clean)
 
-    fix = sub.add_parser("fix", help="Auto-fix OCR code mistakes and write fixed Markdown.")
+    fix = sub.add_parser("fix", help="Auto-fix OCR code mistakes and write fixed source files.")
     fix.add_argument("--task")
     fix.add_argument("--no-auto", action="store_true", help="Copy cleaned Markdown to fixed without automatic changes.")
     fix.set_defaults(func=cmd_fix)
@@ -2741,7 +2741,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--task")
     validate.set_defaults(func=cmd_validate)
 
-    align = sub.add_parser("align", help="Align fixed Markdown to truth files until no diff remains.")
+    align = sub.add_parser("align", help="Align fixed source files to truth files until no diff remains.")
     align.add_argument("--task")
     align.add_argument("--truth-file", help="Truth file for a single task.")
     align.add_argument("--truth-dir", help="Directory containing truth files.")

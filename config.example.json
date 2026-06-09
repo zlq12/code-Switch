@@ -116,7 +116,7 @@
   "llamaparse_timeout_seconds": 300,
   "beyond_compare_path": "C:/Program Files/Beyond Compare 5/BCompare.exe",
   "default_extension": ".md",
-  "final_output_extension": ".md",
+  "final_output_extension": "",
   "fixed_output_encoding": "gb18030",
   "batch_source_extensions": [
     ".c",

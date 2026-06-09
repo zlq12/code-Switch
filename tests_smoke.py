@@ -82,14 +82,14 @@ def test_cli_mock_pipeline() -> None:
             pdf_dir.mkdir(parents=True, exist_ok=True)
             (pdf_dir / "src__main_py.pdf").write_bytes(b"%PDF-1.4\n")
             code_ocr.main(["run", "--mock-ocr"])
-            assert (root / "output" / "fixed" / "src" / "main.md").exists()
+            assert (root / "output" / "fixed" / "src" / "main.py").exists()
             assert (root / "output" / "reports" / "src_main.py.fix.json").exists()
             truth_dir = root / "data" / "reference" / "src"
             truth_dir.mkdir(parents=True, exist_ok=True)
             truth = truth_dir / "main.py"
             truth.write_text("def real():\n    return 42\n", encoding="utf-8")
             code_ocr.main(["align", "--task", "src/main.py"])
-            fixed = (root / "output" / "fixed" / "src" / "main.md").read_text(encoding="utf-8")
+            fixed = (root / "output" / "fixed" / "src" / "main.py").read_text(encoding="utf-8")
             assert fixed == "def real():\n    return 42\n"
             report = root / "output" / "reports" / "src_main.py.truth.json"
             assert report.exists()
@@ -112,7 +112,7 @@ def test_recover_one_mock_without_gui() -> None:
             pdf_dir.mkdir(parents=True, exist_ok=True)
             (pdf_dir / "demo.c.pdf").write_bytes(b"%PDF-1.4\n")
             code_ocr.main(["recover-one", str(source), "--no-capture", "--mock-ocr", "--no-bc"])
-            assert (root / "output" / "fixed" / "demo.md").exists()
+            assert (root / "output" / "fixed" / "demo.c").exists()
         finally:
             code_ocr.ROOT = old_root
 
@@ -140,8 +140,8 @@ def test_recover_batch_mock_without_gui() -> None:
                 "--mock-ocr",
                 "--no-bc",
             ])
-            assert (root / "output" / "fixed" / "a.md").exists()
-            assert (root / "output" / "fixed" / "module" / "b.md").exists()
+            assert (root / "output" / "fixed" / "a.c").exists()
+            assert (root / "output" / "fixed" / "module" / "b.cpp").exists()
         finally:
             code_ocr.ROOT = old_root
 

@@ -26,15 +26,15 @@ workspace/
     manifest/
       tasks.json
     ocr_raw/          # LlamaParse Markdown 原始结果：*.raw.md
-    ocr_clean/        # 清洗后的 Markdown
-    fixed/            # 用于人工修正的 Markdown
+    ocr_clean/        # 清洗后的代码文本
+    fixed/            # 最终修正后的源码扩展名文件
     reports/
     logs/
 ```
 
 ## 自动修正与比较
 
-`clean` 会保留 OCR 清洗后的 Markdown，`fix` 会在 `fixed` 中写入自动修正后的 Markdown，并生成差异报告：
+`clean` 会保留 OCR 清洗后的代码文本，`fix` 会在 `fixed` 中写入自动修正后的源码扩展名文件，并生成差异报告：
 
 ```powershell
 python .\code_ocr.py clean
@@ -46,8 +46,8 @@ python .\code_ocr.py compare
 输出：
 
 ```text
-output/ocr_clean/*.md      # OCR 清洗版
-output/fixed/*.md          # 自动修正版
+output/ocr_clean/*         # OCR 清洗版，保留源文件扩展名
+output/fixed/*             # 自动修正版，保留源文件扩展名
 output/reports/*.fix.diff  # unified diff
 output/reports/*.fix.json  # 修正明细
 ```
@@ -151,14 +151,16 @@ main.cpp.pdf
 main_cpp.pdf
 ```
 
-最终输出默认保留 Markdown 扩展名：
+最终输出默认保留源代码扩展名：
 
 ```json
 {
   "default_extension": ".md",
-  "final_output_extension": ".md"
+  "final_output_extension": ""
 }
 ```
+
+例如 `App_Test.cpp.pdf` 会生成 `output/fixed/App_Test.cpp`，`Driver.h.pdf` 会生成 `output/fixed/Driver.h`。如果确实想继续统一输出 Markdown，可以把 `final_output_extension` 改回 `.md`。
 
 ## Truth Alignment
 
@@ -175,7 +177,7 @@ For one file:
 python .\code_ocr.py align --task 2026-06-08_104713.txt --truth-file .\data\reference\real.cpp --open-compare
 ```
 
-`align` compares the current `fixed/*.md` result with the truth file, writes the truth content into `fixed/*.md`, then compares again. The loop ends only when the generated file has no diff against the truth file. Reports are written to:
+`align` compares the current `fixed/*` result with the truth file, writes the truth content into `fixed/*`, then compares again. The loop ends only when the generated file has no diff against the truth file. Reports are written to:
 
 ```text
 output/reports/*.truth.diff
@@ -206,7 +208,7 @@ If the patch report still contains encrypted bytes but the HTML report shows pla
 python .\code_ocr.py bc-align-html --task 2026-06-08_135934.md --truth-file ".\data\reference\App_Test.cpp" --verify
 ```
 
-This extracts the left-side plaintext lines from the Beyond Compare HTML report and overwrites `output/fixed/*.md`.
+This extracts the left-side plaintext lines from the Beyond Compare HTML report and overwrites `output/fixed/*`.
 
 ## Source Insight + FastStone Capture
 
