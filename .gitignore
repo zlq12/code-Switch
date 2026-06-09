@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+# Local secrets and machine-specific paths.
+config.json
+
+# Generated OCR/capture artifacts.
+data/
+output/
+
+# Local editor/OS noise.
+.DS_Store
+Thumbs.db
