@@ -23,6 +23,8 @@
     "right": 1100,
     "bottom": 950
   },
+  "capture_region_coordinate_mode": "screen",
+  "capture_region_anchor_window_title": "",
   "capture_region_ready_delay_seconds": 1.0,
   "capture_region_drag_delay_seconds": 0.3,
   "capture_region_drag_duration_seconds": 0.8,

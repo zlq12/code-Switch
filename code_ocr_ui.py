@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tkinter UI for the code OCR recovery CLI."""
+"""Tkinter UI for the Beyond Compare source recovery CLI."""
 
 from __future__ import annotations
 
@@ -9,23 +9,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from tkinter import (
-    BOTH,
-    END,
-    LEFT,
-    RIGHT,
-    Button,
-    Checkbutton,
-    Entry,
-    Frame,
-    Label,
-    Listbox,
-    StringVar,
-    Text,
-    Tk,
-    filedialog,
-    messagebox,
-)
+from tkinter import BOTH, END, LEFT, RIGHT, Button, Checkbutton, Entry, Frame, Label, Listbox, StringVar, Text, Tk, filedialog, messagebox
 from tkinter import ttk
 
 import code_ocr
@@ -38,15 +22,13 @@ SOURCE_EXTENSIONS = {".c", ".cpp", ".h", ".hpp"}
 class CodeOcrUi:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title("Code OCR Recovery")
+        self.root.title("Code Source Recovery")
         self.root.geometry("980x680")
         self.root.minsize(820, 560)
 
         self.files: list[Path] = []
         self.export_dir = StringVar()
-        self.no_capture = StringVar(value="0")
         self.no_bc = StringVar(value="0")
-        self.mock_ocr = StringVar(value="0")
         self.status_text = StringVar(value="Ready")
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
@@ -61,7 +43,7 @@ class CodeOcrUi:
 
         header = Frame(outer)
         header.pack(fill="x")
-        Label(header, text="待转换文件（.c / .cpp / .h / .hpp）").pack(side=LEFT)
+        Label(header, text="待恢复文件（.c / .cpp / .h / .hpp）").pack(side=LEFT)
         Button(header, text="导入文件", command=self.add_files).pack(side=RIGHT, padx=(6, 0))
         Button(header, text="移除选中", command=self.remove_selected).pack(side=RIGHT, padx=(6, 0))
         Button(header, text="清空", command=self.clear_files).pack(side=RIGHT, padx=(6, 0))
@@ -82,19 +64,17 @@ class CodeOcrUi:
 
         options = Frame(outer)
         options.pack(fill="x", pady=(0, 10))
-        Checkbutton(options, text="跳过截图（复用已有 PDF）", variable=self.no_capture, onvalue="1", offvalue="0").pack(side=LEFT)
-        Checkbutton(options, text="跳过 Beyond Compare", variable=self.no_bc, onvalue="1", offvalue="0").pack(side=LEFT, padx=(18, 0))
-        Checkbutton(options, text="Mock OCR 测试", variable=self.mock_ocr, onvalue="1", offvalue="0").pack(side=LEFT, padx=(18, 0))
+        Checkbutton(options, text="跳过 Beyond Compare", variable=self.no_bc, onvalue="1", offvalue="0").pack(side=LEFT)
 
         action = Frame(outer)
         action.pack(fill="x", pady=(0, 8))
-        self.start_button = Button(action, text="一键开始转换", command=self.start_conversion, height=2)
+        self.start_button = Button(action, text="开始恢复", command=self.start_conversion, height=2)
         self.start_button.pack(side=LEFT)
         self.progress = ttk.Progressbar(action, mode="determinate")
         self.progress.pack(side=LEFT, fill="x", expand=True, padx=12)
         Label(action, textvariable=self.status_text, width=28, anchor="w").pack(side=RIGHT)
 
-        Label(outer, text="转换进度").pack(anchor="w")
+        Label(outer, text="恢复进度").pack(anchor="w")
         log_frame = Frame(outer)
         log_frame.pack(fill=BOTH, expand=True, pady=(6, 0))
         self.log = Text(log_frame, height=18, wrap="word")
@@ -105,7 +85,7 @@ class CodeOcrUi:
 
     def add_files(self) -> None:
         selected = filedialog.askopenfilenames(
-            title="选择要转换的 C/C++ 文件",
+            title="选择要恢复的 C/C++ 文件",
             filetypes=[
                 ("C/C++ source/header", "*.c *.cpp *.h *.hpp"),
                 ("C source", "*.c"),
@@ -134,16 +114,16 @@ class CodeOcrUi:
         self.file_list.delete(0, END)
 
     def choose_export_dir(self) -> None:
-        selected = filedialog.askdirectory(title="选择转换后文件导出目录")
+        selected = filedialog.askdirectory(title="选择恢复后文件的导出目录")
         if selected:
             self.export_dir.set(str(Path(selected).resolve()))
 
     def start_conversion(self) -> None:
         if self.worker and self.worker.is_alive():
-            messagebox.showinfo("正在转换", "当前转换任务仍在运行。")
+            messagebox.showinfo("正在恢复", "当前恢复任务仍在运行。")
             return
         if not self.files:
-            messagebox.showwarning("缺少文件", "请先导入要转换的 .c/.cpp/.h/.hpp 文件。")
+            messagebox.showwarning("缺少文件", "请先导入要恢复的 .c/.cpp/.h/.hpp 文件。")
             return
         export = Path(self.export_dir.get()).expanduser()
         if not str(export).strip():
@@ -164,7 +144,7 @@ class CodeOcrUi:
         failures: list[tuple[Path, str]] = []
         for index, source in enumerate(files, start=1):
             self.message_queue.put(("status", f"{index}/{len(files)}"))
-            self.message_queue.put(("log", f"\n[{index}/{len(files)}] Converting: {source}"))
+            self.message_queue.put(("log", f"\n[{index}/{len(files)}] Recovering: {source}"))
             try:
                 self._run_one(source)
                 exported = self._export_fixed_file(source, export_dir)
@@ -182,12 +162,8 @@ class CodeOcrUi:
 
     def _run_one(self, source: Path) -> None:
         cmd = [sys.executable, "-u", str(ROOT / "code_ocr.py"), "recover-one", str(source)]
-        if self.no_capture.get() == "1":
-            cmd.append("--no-capture")
         if self.no_bc.get() == "1":
             cmd.append("--no-bc")
-        if self.mock_ocr.get() == "1":
-            cmd.append("--mock-ocr")
 
         self.message_queue.put(("log", "Command: " + " ".join(f'"{item}"' if " " in item else item for item in cmd)))
         self.current_process = subprocess.Popen(
@@ -210,12 +186,11 @@ class CodeOcrUi:
 
     def _assert_task_completed(self, source: Path) -> None:
         config = code_ocr.load_config(ROOT / "config.json")
-        pdf_name = code_ocr.pdf_output_name(source)
-        logical_path = code_ocr.guess_logical_path(Path(pdf_name), config["default_extension"])
+        logical_path = code_ocr.logical_path_for_source(source, config)
         task_id = code_ocr.normalize_id(logical_path)
         task = code_ocr.find_task_by_id(config, task_id)
         if not task:
-            raise RuntimeError(f"Task not found after conversion: {logical_path}")
+            raise RuntimeError(f"Task not found after recovery: {logical_path}")
         if task.status == "failed":
             raise RuntimeError(f"Task failed: {task.error}")
         if not task.fixed_text_path or not Path(task.fixed_text_path).exists():
@@ -223,8 +198,7 @@ class CodeOcrUi:
 
     def _export_fixed_file(self, source: Path, export_dir: Path) -> Path:
         config = code_ocr.load_config(ROOT / "config.json")
-        pdf_name = code_ocr.pdf_output_name(source)
-        logical_path = code_ocr.guess_logical_path(Path(pdf_name), config["default_extension"])
+        logical_path = code_ocr.logical_path_for_source(source, config)
         output_path = code_ocr.with_output_extension(logical_path, config)
         fixed_path = code_ocr.output_dir(config) / "fixed" / output_path
         if not fixed_path.exists():
@@ -246,7 +220,6 @@ class CodeOcrUi:
                     self.progress.configure(value=int(payload))
                 elif kind == "done":
                     self.start_button.configure(state="normal")
-                    messagebox.showinfo("转换完成", self.status_text.get())
         except queue.Empty:
             pass
         self.root.after(100, self._drain_queue)
@@ -262,18 +235,20 @@ def unique_export_path(path: Path) -> Path:
     stem = path.stem
     suffix = path.suffix
     parent = path.parent
-    for index in range(1, 1000):
+    index = 1
+    while True:
         candidate = parent / f"{stem}_{index}{suffix}"
         if not candidate.exists():
             return candidate
-    raise FileExistsError(f"Could not find available export name for {path}")
+        index += 1
 
 
-def main() -> None:
+def main() -> int:
     root = Tk()
     CodeOcrUi(root)
     root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

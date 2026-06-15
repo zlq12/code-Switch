@@ -16,6 +16,10 @@ def test_guess_logical_path() -> None:
     assert code_ocr.parse_sendkeys_hotkey("^%r") == ([0x11, 0x12], ord("R"))
     assert code_ocr.parse_sendkeys_hotkey("^{F10}") == ([0x11], 0x79)
     assert code_ocr.modifier_vk_codes(["ctrl"]) == [0x11]
+    config = dict(code_ocr.DEFAULT_CONFIG)
+    config["capture_region"] = {"left": 1, "top": 2, "right": 3, "bottom": 4}
+    config["capture_region_coordinate_mode"] = "screen"
+    assert code_ocr.resolve_capture_region(config) == (1, 2, 3, 4)
 
 
 def test_clean_code() -> None:

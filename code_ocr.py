@@ -47,6 +47,8 @@ DEFAULT_CONFIG = {
         "right": 1100,
         "bottom": 950
     },
+    "capture_region_coordinate_mode": "screen",
+    "capture_region_anchor_window_title": "",
     "capture_region_ready_delay_seconds": 1.0,
     "capture_region_drag_delay_seconds": 0.3,
     "capture_region_drag_duration_seconds": 0.8,
@@ -189,6 +191,18 @@ class Task:
     updated_at: float | None = None
 
 
+def enable_dpi_awareness() -> None:
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware.
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def load_config(config_path: Path) -> dict[str, Any]:
     if not config_path.exists():
         return dict(DEFAULT_CONFIG)
@@ -319,9 +333,9 @@ def launch_source_file(config: dict[str, Any], source_file: Path) -> None:
         subprocess.Popen(["xdg-open", str(source_file)])
 
 
-def maximize_window_by_title(title: str, timeout_seconds: float = 10.0) -> bool:
+def find_window_handle_by_title(title: str, timeout_seconds: float = 10.0) -> int | None:
     if os.name != "nt":
-        return False
+        return None
     deadline = time.time() + timeout_seconds
     user32 = ctypes.windll.user32
     hwnd_result = ctypes.c_void_p()
@@ -345,11 +359,53 @@ def maximize_window_by_title(title: str, timeout_seconds: float = 10.0) -> bool:
         hwnd_result.value = None
         user32.EnumWindows(enum_windows_proc(callback), 0)
         if hwnd_result.value:
-            user32.ShowWindow(hwnd_result.value, 3)  # SW_MAXIMIZE
-            user32.SetForegroundWindow(hwnd_result.value)
-            return True
+            return int(hwnd_result.value)
         time.sleep(0.3)
-    return False
+    return None
+
+
+def maximize_window_by_title(title: str, timeout_seconds: float = 10.0) -> bool:
+    if os.name != "nt":
+        return False
+    hwnd = find_window_handle_by_title(title, timeout_seconds)
+    if not hwnd:
+        return False
+    user32 = ctypes.windll.user32
+    user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+    user32.SetForegroundWindow(hwnd)
+    return True
+
+
+def window_rect_by_title(title: str, timeout_seconds: float = 10.0, client_area: bool = False) -> tuple[int, int, int, int] | None:
+    if os.name != "nt":
+        return None
+    hwnd = find_window_handle_by_title(title, timeout_seconds)
+    if not hwnd:
+        return None
+    user32 = ctypes.windll.user32
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    rect = RECT()
+    if client_area:
+        if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+            return None
+        point = POINT(0, 0)
+        if not user32.ClientToScreen(hwnd, ctypes.byref(point)):
+            return None
+        return (
+            int(point.x),
+            int(point.y),
+            int(point.x + rect.right - rect.left),
+            int(point.y + rect.bottom - rect.top),
+        )
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return None
+    return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
 
 
 def visible_window_titles() -> list[str]:
@@ -695,8 +751,43 @@ def capture_region_from_config(config: dict[str, Any]) -> tuple[int, int, int, i
     return left, top, right, bottom
 
 
-def perform_configured_region_drag(config: dict[str, Any]) -> None:
+def resolve_capture_region(config: dict[str, Any], window_title: str | None = None) -> tuple[int, int, int, int]:
     left, top, right, bottom = capture_region_from_config(config)
+    mode = str(config.get("capture_region_coordinate_mode", "screen")).strip().lower()
+    if mode in {"", "screen", "absolute"}:
+        return left, top, right, bottom
+    if mode not in {"window", "client"}:
+        raise ValueError(f"Unsupported capture_region_coordinate_mode: {mode}")
+
+    anchor_title = (
+        str(config.get("capture_region_anchor_window_title", "")).strip()
+        or str(window_title or "").strip()
+        or str(config.get("source_insight_window_title", "")).strip()
+    )
+    if not anchor_title:
+        raise ValueError("capture_region_coordinate_mode requires capture_region_anchor_window_title or source_insight_window_title")
+    anchor = window_rect_by_title(anchor_title, client_area=mode == "client")
+    if not anchor:
+        raise RuntimeError(f"Could not find anchor window for capture region: {anchor_title}")
+    anchor_left, anchor_top, anchor_right, anchor_bottom = anchor
+    resolved = (
+        anchor_left + left,
+        anchor_top + top,
+        anchor_left + right,
+        anchor_top + bottom,
+    )
+    if resolved[0] < anchor_left or resolved[1] < anchor_top or resolved[2] > anchor_right or resolved[3] > anchor_bottom:
+        print(
+            "Warning: resolved capture region extends outside anchor "
+            f"{mode} rect {anchor}: {resolved}"
+        )
+    print(f"Anchor {mode} rect for '{anchor_title}': {anchor}")
+    print(f"Relative capture region: ({left}, {top}) -> ({right}, {bottom})")
+    return resolved
+
+
+def perform_configured_region_drag(config: dict[str, Any], window_title: str | None = None) -> None:
+    left, top, right, bottom = resolve_capture_region(config, window_title)
     delay = float(config.get("capture_region_drag_delay_seconds", 0.2))
     duration = float(config.get("capture_region_drag_duration_seconds", 0.8))
     steps = int(config.get("capture_region_drag_steps", 24))
@@ -1955,7 +2046,8 @@ def cmd_init(args: argparse.Namespace) -> None:
 def cmd_capture(args: argparse.Namespace) -> None:
     config = load_config(ROOT / args.config)
     if args.drag_only:
-        perform_configured_region_drag(config)
+        title = args.window_title or str(config.get("source_insight_window_title", "")).strip()
+        perform_configured_region_drag(config, title)
         return
     if not args.source_file:
         raise SystemExit("source_file is required unless --drag-only is used.")
@@ -2002,7 +2094,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
             time.sleep(ready_delay)
             if args.pause_before_drag:
                 input("FastStone should now be in region-select mode. Press Enter to drag the configured region...")
-            perform_configured_region_drag(config)
+            perform_configured_region_drag(config, title)
 
     if args.no_wait:
         print("Not waiting for PDF output.")
@@ -2078,17 +2170,27 @@ def cmd_capture(args: argparse.Namespace) -> None:
 
 
 def cmd_mouse_pos(args: argparse.Namespace) -> None:
+    def format_position() -> str:
+        x, y = get_mouse_position()
+        if not getattr(args, "relative_window", None):
+            return f"{x},{y}"
+        client_area = bool(getattr(args, "client", False))
+        rect = window_rect_by_title(str(args.relative_window), timeout_seconds=1.0, client_area=client_area)
+        if not rect:
+            return f"{x},{y}; relative_window_not_found={args.relative_window}"
+        left, top, right, bottom = rect
+        area = "client" if client_area else "window"
+        return f"{x},{y}; {area}_relative={x - left},{y - top}; {area}_rect=({left},{top},{right},{bottom})"
+
     if args.watch:
         print("Press Ctrl+C to stop.")
         try:
             while True:
-                x, y = get_mouse_position()
-                print(f"{x},{y}")
+                print(format_position())
                 time.sleep(float(args.interval))
         except KeyboardInterrupt:
             return
-    x, y = get_mouse_position()
-    print(f"{x},{y}")
+    print(format_position())
 
 
 def cmd_windows(args: argparse.Namespace) -> None:
@@ -2097,7 +2199,12 @@ def cmd_windows(args: argparse.Namespace) -> None:
     for title in visible_window_titles():
         if args.filter and args.filter.lower() not in title.lower():
             continue
-        print(title)
+        if args.rects:
+            rect = window_rect_by_title(title, timeout_seconds=0.1)
+            client = window_rect_by_title(title, timeout_seconds=0.1, client_area=True)
+            print(f"{title} | window={rect} | client={client}")
+        else:
+            print(title)
 
 
 def cmd_close_dialogs(args: argparse.Namespace) -> None:
@@ -2320,7 +2427,7 @@ def open_beyond_compare(config: dict[str, Any], left: str, right: str) -> None:
 
 def write_bc_script(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
 
 
 def quote_bc_path(path: str | Path) -> str:
@@ -2368,13 +2475,11 @@ def prepare_bc_stage(task: Task, truth_path: Path, fixed_path: Path, config: dic
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True, exist_ok=True)
-    truth_stage = stage / ascii_safe_filename("truth_" + truth_path.name, truth_path.suffix)
     fixed_stage = stage / ascii_safe_filename("fixed_" + fixed_path.name, fixed_path.suffix)
-    shutil.copyfile(truth_path, truth_stage)
     shutil.copyfile(fixed_path, fixed_stage)
     return {
         "stage": stage,
-        "truth": truth_stage,
+        "truth": truth_path,
         "fixed": fixed_stage,
         "html": stage / "bc_report.html",
         "patch": stage / "bc_report.patch",
@@ -2424,7 +2529,6 @@ def cmd_bc_report(args: argparse.Namespace) -> None:
             truth_bc = str(stage["truth"])
             fixed_bc = str(stage["fixed"])
             html_bc = str(stage["html"])
-            patch_bc = str(stage["patch"])
             write_bc_script(
                 stage["script"],
                 [
@@ -2436,12 +2540,6 @@ def cmd_bc_report(args: argparse.Namespace) -> None:
                         "output-options:html-color,wrap-word "
                         f"{quote_bc_path(truth_bc)} {quote_bc_path(fixed_bc)}"
                     ),
-                    (
-                        "text-report layout:patch "
-                        "options:patch-unified "
-                        f"output-to:{quote_bc_path(patch_bc)} "
-                        f"{quote_bc_path(truth_bc)} {quote_bc_path(fixed_bc)}"
-                    ),
                 ],
             )
             shutil.copyfile(stage["script"], script_path)
@@ -2450,6 +2548,11 @@ def cmd_bc_report(args: argparse.Namespace) -> None:
                 shutil.copyfile(stage["html"], html_path)
             if stage["patch"].exists():
                 shutil.copyfile(stage["patch"], patch_path)
+            if not html_path.exists():
+                raise FileNotFoundError(
+                    "Beyond Compare did not create the HTML report; "
+                    f"script={stage['script']}; left={truth_path}; right={fixed_path}; output={stage['html']}"
+                )
             print(f"BC report: {task.logical_path}")
             print(f"  html:  {html_path}")
             print(f"  patch: {patch_path}")
@@ -2553,47 +2656,55 @@ def cmd_run(args: argparse.Namespace) -> None:
     cmd_validate(args)
 
 
+def logical_path_for_source(source_file: Path, config: dict[str, Any], source_root: Path | None = None) -> str:
+    if source_root:
+        try:
+            return source_file.relative_to(source_root if source_root.is_dir() else source_root.parent).as_posix()
+        except ValueError:
+            pass
+    reference_root = resolve_workspace_path(str(config.get("reference_dir", "data/reference"))).resolve()
+    try:
+        return source_file.relative_to(reference_root).as_posix()
+    except ValueError:
+        return source_file.name
+
+
+def create_blank_bc_task(config: dict[str, Any], source_file: Path, logical_path: str | None = None) -> Task:
+    logical = logical_path or logical_path_for_source(source_file, config)
+    task_id = normalize_id(logical)
+    fixed_path = (output_dir(config) / "fixed" / with_output_extension(logical, config)).resolve()
+    fixed_path.parent.mkdir(parents=True, exist_ok=True)
+    if not fixed_path.exists() or fixed_path.stat().st_size == 0:
+        write_fixed_text(fixed_path, "\n", config)
+
+    tasks = [task for task in load_tasks(config) if task.id != task_id and task.logical_path != logical]
+    task = Task(
+        id=task_id,
+        logical_path=logical,
+        pdf_path="",
+        status="blank",
+        fixed_text_path=str(fixed_path),
+        error=None,
+    )
+    tasks.append(task)
+    save_tasks(config, sorted(tasks, key=lambda item: item.logical_path.lower()))
+    return task
+
+
 def cmd_recover_one(args: argparse.Namespace) -> None:
     config = load_config(ROOT / args.config)
     source_file = resolve_workspace_path(args.source_file).resolve()
     if not source_file.exists():
         raise SystemExit(f"Source file does not exist: {source_file}")
 
-    pdf_dir = (ROOT / (args.pdf_dir or config["pdf_input_dir"])).resolve()
-    pdf_name = pdf_output_name(source_file, args.pdf_name)
-    pdf_path = pdf_dir / pdf_name
-    logical_path = guess_logical_path(pdf_path, config["default_extension"])
-    task_id = normalize_id(logical_path)
+    source_root_arg = getattr(args, "source_root", None)
+    source_root = Path(source_root_arg).resolve() if source_root_arg else None
+    logical_path = getattr(args, "logical_path", None) or logical_path_for_source(source_file, config, source_root)
+    task = create_blank_bc_task(config, source_file, logical_path)
+    task_id = task.id
 
-    if not args.no_capture:
-        capture_args = argparse.Namespace(
-            config=args.config,
-            source_file=str(source_file),
-            pdf_dir=str(pdf_dir),
-            pdf_name=pdf_name,
-            output_mode=getattr(args, "output_mode", None),
-            image_dir=getattr(args, "image_dir", None),
-            convert_hotkey=getattr(args, "convert_hotkey", None),
-            hotkey=args.hotkey,
-            window_title=args.window_title,
-            region=True,
-            pause_before_drag=args.pause_before_drag,
-            drag_only=False,
-            open_only=False,
-            no_hotkey=False,
-            no_wait=False,
-            wait_timeout=args.wait_timeout,
-            scan=True,
-        )
-        cmd_capture(capture_args)
-    else:
-        scan_args = argparse.Namespace(config=args.config, pdf_dir=str(pdf_dir))
-        cmd_scan(scan_args)
-
-    print(f"Recover task: {task_id} ({logical_path})")
-    ocr_args = argparse.Namespace(config=args.config, task=task_id, mock=args.mock_ocr, force=True)
-    clean_args = argparse.Namespace(config=args.config, task=task_id)
-    fix_args = argparse.Namespace(config=args.config, task=task_id, no_auto=False)
+    print(f"Recover task: {task_id} ({task.logical_path})")
+    print(f"Blank target: {task.fixed_text_path}")
     validate_args = argparse.Namespace(config=args.config, task=task_id)
     bc_report_args = argparse.Namespace(
         config=args.config,
@@ -2613,10 +2724,6 @@ def cmd_recover_one(args: argparse.Namespace) -> None:
         left_only=str(config.get("bc_html_align_source_side", "left")).strip().lower() == "left",
     )
 
-    cmd_ocr(ocr_args)
-    cmd_clean(clean_args)
-    cmd_fix(fix_args)
-    cmd_validate(validate_args)
     if args.no_bc:
         print("Skipping Beyond Compare stages (--no-bc).")
         print("Recover-one complete.")
@@ -2635,7 +2742,7 @@ def find_task_by_id(config: dict[str, Any], task_id: str) -> Task | None:
 
 
 def wait_for_recover_task_completion(config: dict[str, Any], task_id: str, timeout_seconds: float, poll_seconds: float) -> Task:
-    complete_statuses = {"validated", "needs_review", "bc_html_aligned", "truth_aligned"}
+    complete_statuses = {"blank", "validated", "needs_review", "bc_html_aligned", "truth_aligned"}
     deadline = time.time() + timeout_seconds
     last_status = None
     while time.time() < deadline:
@@ -2654,12 +2761,6 @@ def wait_for_recover_task_completion(config: dict[str, Any], task_id: str, timeo
 
 def settle_between_batch_files(config: dict[str, Any]) -> None:
     if config.get("batch_close_dialogs_between_files", True):
-        auto_close_configured_windows(
-            config,
-            "faststone_pdf_complete_window_titles",
-            "faststone_pdf_complete_keys",
-            "faststone_pdf_complete_delay_seconds",
-        )
         auto_close_configured_windows(
             config,
             "bc_script_dialog_window_titles",
@@ -2685,29 +2786,19 @@ def cmd_recover_batch(args: argparse.Namespace) -> None:
     successes: list[Path] = []
     failures: list[tuple[Path, str]] = []
     for index, source_file in enumerate(files, start=1):
-        pdf_name = batch_pdf_output_name(source_file, source_root if source_root.is_dir() else source_file.parent)
-        print(f"[{index}/{len(files)}] Recovering: {source_file} -> {pdf_name}")
+        logical_path = logical_path_for_source(source_file, config, source_root if source_root.is_dir() else source_file.parent)
+        print(f"[{index}/{len(files)}] Recovering: {source_file} -> {logical_path}")
         recover_args = argparse.Namespace(
             config=args.config,
             source_file=str(source_file),
-            pdf_dir=args.pdf_dir,
-            pdf_name=pdf_name,
-            output_mode=args.output_mode,
-            image_dir=args.image_dir,
-            convert_hotkey=args.convert_hotkey,
-            hotkey=args.hotkey,
-            window_title=args.window_title,
-            pause_before_drag=args.pause_before_drag,
-            wait_timeout=args.wait_timeout,
-            no_capture=args.no_capture,
-            mock_ocr=args.mock_ocr,
+            source_root=str(source_root if source_root.is_dir() else source_file.parent),
+            logical_path=logical_path,
             no_bc=args.no_bc,
             no_verify=args.no_verify,
         )
         try:
             cmd_recover_one(recover_args)
             if config.get("batch_wait_for_completion", True) and not args.no_wait_completion:
-                logical_path = guess_logical_path(Path(pdf_name), config["default_extension"])
                 task_id = normalize_id(logical_path)
                 completed = wait_for_recover_task_completion(
                     config,
@@ -2736,7 +2827,7 @@ def cmd_recover_batch(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Batch OCR pipeline for FastStone PDF code screenshots.")
+    parser = argparse.ArgumentParser(description="Recover protected source files through Beyond Compare HTML reports.")
     parser.add_argument("--config", default="config.json")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -2766,10 +2857,13 @@ def build_parser() -> argparse.ArgumentParser:
     mouse_pos = sub.add_parser("mouse-pos", help="Print current mouse position for fixed region setup.")
     mouse_pos.add_argument("--watch", action="store_true", help="Continuously print mouse position.")
     mouse_pos.add_argument("--interval", default="0.5", help="Watch interval in seconds.")
+    mouse_pos.add_argument("--relative-window", help="Also print coordinates relative to a matching window title.")
+    mouse_pos.add_argument("--client", action="store_true", help="Use the matching window client area for --relative-window.")
     mouse_pos.set_defaults(func=cmd_mouse_pos)
 
     windows = sub.add_parser("windows", help="List visible Windows window titles for GUI automation debugging.")
     windows.add_argument("--filter", help="Only show titles containing this text.")
+    windows.add_argument("--rects", action="store_true", help="Also print window and client rectangles.")
     windows.set_defaults(func=cmd_windows)
 
     close_dialogs = sub.add_parser("close-dialogs", help="Send configured close/confirm keys to FastStone/BC dialogs.")
@@ -2840,24 +2934,24 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--mock-ocr", action="store_true")
     run.set_defaults(func=cmd_run)
 
-    recover_one = sub.add_parser("recover-one", help="Run capture, OCR, fix, BC report, and HTML alignment for one source file.")
+    recover_one = sub.add_parser("recover-one", help="Create a blank output file and recover source text through Beyond Compare.")
     recover_one.add_argument("source_file", help="Encrypted/protected source file path visible in Source Insight/Beyond Compare.")
-    recover_one.add_argument("--pdf-dir", help="Directory where FastStone writes PDF files.")
-    recover_one.add_argument("--pdf-name", help="Captured PDF name. Defaults to source filename plus .pdf.")
-    recover_one.add_argument("--output-mode", choices=["pdf", "faststone_current_image_pdf", "faststone_save_as_pdf", "faststone_pdf_tool", "image_then_pdf"], help="How FastStone output becomes PDF.")
-    recover_one.add_argument("--image-dir", help="Directory where FastStone writes screenshot images before PDF conversion.")
-    recover_one.add_argument("--convert-hotkey", help="Hotkey that triggers FastStone's built-in PDF conversion.")
-    recover_one.add_argument("--hotkey", help="Override FastStone capture hotkey.")
-    recover_one.add_argument("--window-title", help="Source Insight window title.")
-    recover_one.add_argument("--pause-before-drag", action="store_true", help="Pause after FastStone hotkey before dragging region.")
-    recover_one.add_argument("--wait-timeout", help="Seconds to wait for FastStone PDF output.")
-    recover_one.add_argument("--no-capture", action="store_true", help="Skip capture and reuse an existing PDF.")
-    recover_one.add_argument("--mock-ocr", action="store_true", help="Use mock OCR for testing the local pipeline.")
+    recover_one.add_argument("--pdf-dir", help=argparse.SUPPRESS)
+    recover_one.add_argument("--pdf-name", help=argparse.SUPPRESS)
+    recover_one.add_argument("--output-mode", choices=["pdf", "faststone_current_image_pdf", "faststone_save_as_pdf", "faststone_pdf_tool", "image_then_pdf"], help=argparse.SUPPRESS)
+    recover_one.add_argument("--image-dir", help=argparse.SUPPRESS)
+    recover_one.add_argument("--convert-hotkey", help=argparse.SUPPRESS)
+    recover_one.add_argument("--hotkey", help=argparse.SUPPRESS)
+    recover_one.add_argument("--window-title", help=argparse.SUPPRESS)
+    recover_one.add_argument("--pause-before-drag", action="store_true", help=argparse.SUPPRESS)
+    recover_one.add_argument("--wait-timeout", help=argparse.SUPPRESS)
+    recover_one.add_argument("--no-capture", action="store_true", help=argparse.SUPPRESS)
+    recover_one.add_argument("--mock-ocr", action="store_true", help=argparse.SUPPRESS)
     recover_one.add_argument("--no-bc", action="store_true", help="Skip Beyond Compare stages.")
     recover_one.add_argument("--no-verify", action="store_true", help="Do not regenerate a BC report after HTML alignment.")
     recover_one.set_defaults(func=cmd_recover_one)
 
-    recover_batch = sub.add_parser("recover-batch", help="Run recover-one over a directory of source files.")
+    recover_batch = sub.add_parser("recover-batch", help="Run blank-file Beyond Compare recovery over a directory of source files.")
     recover_batch.add_argument("source_root", help="Source file or directory to process.")
     recover_batch.add_argument("--extensions", help="Comma-separated source extensions. Defaults to batch_source_extensions.")
     recover_batch.add_argument("--non-recursive", action="store_true", help="Only process files directly under source_root.")
@@ -2866,16 +2960,16 @@ def build_parser() -> argparse.ArgumentParser:
     recover_batch.add_argument("--completion-timeout", help="Seconds to wait for each file to reach a final task status.")
     recover_batch.add_argument("--no-wait-completion", action="store_true", help="Do not enforce per-file completion barrier.")
     recover_batch.add_argument("--stop-on-error", action="store_true", help="Stop the batch at the first failed file.")
-    recover_batch.add_argument("--pdf-dir", help="Directory where FastStone writes PDF files.")
-    recover_batch.add_argument("--output-mode", choices=["pdf", "faststone_current_image_pdf", "faststone_save_as_pdf", "faststone_pdf_tool", "image_then_pdf"], help="How FastStone output becomes PDF.")
-    recover_batch.add_argument("--image-dir", help="Directory where FastStone writes screenshot images before PDF conversion.")
-    recover_batch.add_argument("--convert-hotkey", help="Hotkey that triggers FastStone's built-in PDF conversion.")
-    recover_batch.add_argument("--hotkey", help="Override FastStone capture hotkey.")
-    recover_batch.add_argument("--window-title", help="Source Insight window title.")
-    recover_batch.add_argument("--pause-before-drag", action="store_true", help="Pause after FastStone hotkey before dragging region.")
-    recover_batch.add_argument("--wait-timeout", help="Seconds to wait for FastStone PDF output.")
-    recover_batch.add_argument("--no-capture", action="store_true", help="Skip capture and reuse existing PDFs.")
-    recover_batch.add_argument("--mock-ocr", action="store_true", help="Use mock OCR for testing the local pipeline.")
+    recover_batch.add_argument("--pdf-dir", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--output-mode", choices=["pdf", "faststone_current_image_pdf", "faststone_save_as_pdf", "faststone_pdf_tool", "image_then_pdf"], help=argparse.SUPPRESS)
+    recover_batch.add_argument("--image-dir", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--convert-hotkey", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--hotkey", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--window-title", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--pause-before-drag", action="store_true", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--wait-timeout", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--no-capture", action="store_true", help=argparse.SUPPRESS)
+    recover_batch.add_argument("--mock-ocr", action="store_true", help=argparse.SUPPRESS)
     recover_batch.add_argument("--no-bc", action="store_true", help="Skip Beyond Compare stages.")
     recover_batch.add_argument("--no-verify", action="store_true", help="Do not regenerate a BC report after HTML alignment.")
     recover_batch.set_defaults(func=cmd_recover_batch)
@@ -2884,6 +2978,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_dpi_awareness()
     parser = build_parser()
     args = parser.parse_args(argv)
     args.func(args)
