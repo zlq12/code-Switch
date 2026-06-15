@@ -124,6 +124,11 @@
     ".h",
     ".hpp"
   ],
+  "batch_wait_for_completion": true,
+  "batch_completion_timeout_seconds": 600,
+  "batch_completion_poll_seconds": 2,
+  "batch_gui_settle_seconds": 3,
+  "batch_close_dialogs_between_files": true,
   "reference_extensions": [
     ".c",
     ".cpp",

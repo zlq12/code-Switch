@@ -111,6 +111,11 @@ DEFAULT_CONFIG = {
     "fixed_output_encoding": "gb18030",
     "reference_extensions": [".c", ".cpp", ".h", ".hpp", ".py", ".java", ".js", ".ts", ".cs", ".md", ".txt"],
     "batch_source_extensions": [".c", ".cpp", ".h", ".hpp"],
+    "batch_wait_for_completion": True,
+    "batch_completion_timeout_seconds": 600,
+    "batch_completion_poll_seconds": 2,
+    "batch_gui_settle_seconds": 3,
+    "batch_close_dialogs_between_files": True,
     "reference_encoding": "auto",
     "bc_script_dir": "output/bc_scripts",
     "bc_report_dir": "output/bc_reports",
@@ -2622,6 +2627,50 @@ def cmd_recover_one(args: argparse.Namespace) -> None:
     print("Recover-one complete.")
 
 
+def find_task_by_id(config: dict[str, Any], task_id: str) -> Task | None:
+    for task in load_tasks(config):
+        if task.id == task_id or task.logical_path == task_id:
+            return task
+    return None
+
+
+def wait_for_recover_task_completion(config: dict[str, Any], task_id: str, timeout_seconds: float, poll_seconds: float) -> Task:
+    complete_statuses = {"validated", "needs_review", "bc_html_aligned", "truth_aligned"}
+    deadline = time.time() + timeout_seconds
+    last_status = None
+    while time.time() < deadline:
+        task = find_task_by_id(config, task_id)
+        if not task:
+            last_status = "missing"
+        elif task.status == "failed":
+            raise RuntimeError(f"Task failed: {task.logical_path}: {task.error}")
+        elif task.status in complete_statuses and task.fixed_text_path and Path(task.fixed_text_path).exists():
+            return task
+        else:
+            last_status = f"{task.status}; fixed={task.fixed_text_path}"
+        time.sleep(max(poll_seconds, 0.2))
+    raise TimeoutError(f"Timed out waiting for task {task_id} to complete; last={last_status}")
+
+
+def settle_between_batch_files(config: dict[str, Any]) -> None:
+    if config.get("batch_close_dialogs_between_files", True):
+        auto_close_configured_windows(
+            config,
+            "faststone_pdf_complete_window_titles",
+            "faststone_pdf_complete_keys",
+            "faststone_pdf_complete_delay_seconds",
+        )
+        auto_close_configured_windows(
+            config,
+            "bc_script_dialog_window_titles",
+            "bc_script_dialog_keys",
+        )
+    settle_seconds = float(config.get("batch_gui_settle_seconds", 3))
+    if settle_seconds > 0:
+        print(f"Waiting {settle_seconds:g}s for GUI to settle before next file...")
+        time.sleep(settle_seconds)
+
+
 def cmd_recover_batch(args: argparse.Namespace) -> None:
     config = load_config(ROOT / args.config)
     source_root = resolve_workspace_path(args.source_root).resolve()
@@ -2657,6 +2706,17 @@ def cmd_recover_batch(args: argparse.Namespace) -> None:
         )
         try:
             cmd_recover_one(recover_args)
+            if config.get("batch_wait_for_completion", True) and not args.no_wait_completion:
+                logical_path = guess_logical_path(Path(pdf_name), config["default_extension"])
+                task_id = normalize_id(logical_path)
+                completed = wait_for_recover_task_completion(
+                    config,
+                    task_id,
+                    float(args.completion_timeout or config.get("batch_completion_timeout_seconds", 600)),
+                    float(config.get("batch_completion_poll_seconds", 2)),
+                )
+                print(f"Batch barrier passed: {completed.logical_path} -> {completed.status}")
+            settle_between_batch_files(config)
             successes.append(source_file)
         except Exception as exc:
             failures.append((source_file, str(exc)))
@@ -2664,6 +2724,7 @@ def cmd_recover_batch(args: argparse.Namespace) -> None:
             if args.stop_on_error:
                 break
         if args.between_delay:
+            print(f"Waiting {args.between_delay}s batch delay before next file...")
             time.sleep(float(args.between_delay))
 
     print(f"Recover-batch complete: {len(successes)} succeeded, {len(failures)} failed")
@@ -2802,6 +2863,8 @@ def build_parser() -> argparse.ArgumentParser:
     recover_batch.add_argument("--non-recursive", action="store_true", help="Only process files directly under source_root.")
     recover_batch.add_argument("--limit", help="Process only the first N files, useful for dry runs.")
     recover_batch.add_argument("--between-delay", help="Seconds to wait between files.")
+    recover_batch.add_argument("--completion-timeout", help="Seconds to wait for each file to reach a final task status.")
+    recover_batch.add_argument("--no-wait-completion", action="store_true", help="Do not enforce per-file completion barrier.")
     recover_batch.add_argument("--stop-on-error", action="store_true", help="Stop the batch at the first failed file.")
     recover_batch.add_argument("--pdf-dir", help="Directory where FastStone writes PDF files.")
     recover_batch.add_argument("--output-mode", choices=["pdf", "faststone_current_image_pdf", "faststone_save_as_pdf", "faststone_pdf_tool", "image_then_pdf"], help="How FastStone output becomes PDF.")

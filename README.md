@@ -452,11 +452,24 @@ python .\code_ocr.py recover-batch ".\data\reference"
 
 The batch command recursively scans source files using `batch_source_extensions` and runs the same capture/OCR/fix/BC alignment flow as `recover-one`.
 
+By default, batch mode is strictly sequential. It does not start the next file until the current task reaches a final state such as `validated` or `needs_review`, and the fixed output file exists:
+
+```json
+{
+  "batch_wait_for_completion": true,
+  "batch_completion_timeout_seconds": 600,
+  "batch_completion_poll_seconds": 2,
+  "batch_gui_settle_seconds": 3,
+  "batch_close_dialogs_between_files": true
+}
+```
+
 Useful dry-run and recovery variants:
 
 ```powershell
 python .\code_ocr.py recover-batch ".\data\reference" --limit 1
 python .\code_ocr.py recover-batch ".\data\reference" --extensions ".cpp,.h" --limit 5
+python .\code_ocr.py recover-batch ".\data\reference" --completion-timeout 900
 python .\code_ocr.py recover-batch ".\data\reference" --no-capture
 python .\code_ocr.py recover-batch ".\data\reference" --mock-ocr --no-bc --no-capture
 ```
