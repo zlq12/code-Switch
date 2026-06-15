@@ -522,6 +522,16 @@ To test only the dialog closing behavior while a prompt is visible:
 python .\code_ocr.py close-dialogs
 ```
 
+## Desktop UI
+
+Start the desktop UI:
+
+```powershell
+python .\code_ocr_ui.py
+```
+
+The UI can import one or more `.c` / `.cpp` / `.h` / `.hpp` files, choose an export directory, run conversion with one click, and show live progress logs. After each file finishes, the generated source file from `output/fixed` is copied to the selected export directory.
+
 If FastStone is configured to save an intermediate image file before PDF conversion, use:
 
 ```json
